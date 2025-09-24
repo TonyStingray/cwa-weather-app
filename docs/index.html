@@ -82,17 +82,24 @@
     stationSel.appendChild(opt);
   });
 
-  // 3) Chart.js + 風險色帶
+   // 3) Chart.js + 風險色帶（對應 Y=0~1，Low/Moderate/High 三帶）
   const riskBands = {
     id: 'riskBands',
     beforeDraw(chart){
-      const {ctx, chartArea:{left,right,top,bottom,height}} = chart;
+      const {ctx, chartArea:{left,right,top,bottom}, scales:{y}} = chart;
       ctx.save();
-      ctx.fillStyle='rgba(52,211,153,0.65)'; ctx.fillRect(left,bottom-height/3,right-left,height/3);
-      ctx.fillStyle='rgba(253,224,71,0.65)'; ctx.fillRect(left,bottom-2*height/3,right-left,height/3);
-      ctx.fillStyle='rgba(239,68,68,0.65)'; ctx.fillRect(left,top,right-left,height/3);
-      const x = chart.scales.x.getPixelForValue(new Date());
-      ctx.strokeStyle='#2563eb'; ctx.setLineDash([6,6]); ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x,bottom); ctx.stroke();
+      const yLowTop = y.getPixelForValue(1/3);   // 0.33
+      const yMidTop = y.getPixelForValue(2/3);   // 0.66
+      // 低風險：0 ~ 0.33
+      ctx.fillStyle='rgba(52,211,153,0.65)';   ctx.fillRect(left, yLowTop, right-left, bottom - yLowTop);
+      // 中風險：0.33 ~ 0.66
+      ctx.fillStyle='rgba(253,224,71,0.65)';   ctx.fillRect(left, yMidTop, right-left, yLowTop - yMidTop);
+      // 高風險：0.66 ~ 1
+      ctx.fillStyle='rgba(239,68,68,0.65)';    ctx.fillRect(left, top, right-left, yMidTop - top);
+      // 現在時間虛線
+      const xNow = chart.scales.x.getPixelForValue(new Date());
+      ctx.strokeStyle='#2563eb'; ctx.setLineDash([6,6]);
+      ctx.beginPath(); ctx.moveTo(xNow, top); ctx.lineTo(xNow, bottom); ctx.stroke();
       ctx.restore();
     }
   };
@@ -100,17 +107,17 @@
   const ctx = document.getElementById('riskChart');
   const chart = new Chart(ctx, {
     type: 'line',
-    data: { datasets: [{ label:'Risk', parsing:false, data:[], borderWidth:2, pointRadius:0, tension:.35 }]},
+    data: { datasets: [{ label:'Risk(0–1)', parsing:false, data:[], borderWidth:2, pointRadius:0, spanGaps:true, tension:.35 }]},
     options: {
       animation:false,
       scales:{
-        x:{ type:'time', time:{ unit:'hour' }},
-        y:{ min:1, max:3, ticks:{ callback: v => ({1:'Low',2:'Moderate',3:'High'}[v]||v) } }
+        x:{ type:'time', time:{ unit:'day' }},    // 先給 day；等會依範圍改
+        y:{ min:0, max:1, ticks:{ stepSize:0.1 }, title:{display:true, text:'Risk (0.0–1.0)'} }
       },
       plugins:{ legend:{display:false},
         tooltip:{ callbacks:{ label: ctx=>{
-          const d=ctx.raw, label=d.risk===3?'High':(d.risk===2?'Moderate':'Low');
-          return `${label} (T=${d.temp??'–'}°C, RH=${d.rh??'–'}%)`;
+          const d=ctx.raw;
+          return `risk=${(d.y??NaN).toFixed(2)}  (T=${d.temp??'–'}°C, RH=${d.rh??'–'}%)`;
         }}}
       }
     },
@@ -119,12 +126,28 @@
 
   // 4) 載資料 + 更新圖
   let raw = [];
+  // 連續 soft score：0.0~1.0（高風險接近 1，中風險約 0.6，低風險接近 0）
+  const clamp01 = x => Math.max(0, Math.min(1, x));
+  const smoothstep = (x, a, b) => {           // 平滑斜坡（避免硬切）
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+  };
+
   function riskIndex(t, h){
-    if (t==null || h==null) return 1;
-    if (t>=28 && h>=80) return 3;
-    if (t>=20 && t<28 && h>=50 && h<80) return 2;
-    return 1;
+    if (t==null || h==null) return null;
+    // 高風險：T≈28↑、RH≈80↑（用平滑門檻 27~29 與 78~82）
+    const highT = smoothstep(t, 27, 29);
+    const highH = smoothstep(h, 78, 82);
+    const high  = highT * highH;              // AND → 乘積
+    // 中風險：20≤T<28 與 50≤RH<80（用 19~21、27~29 與 48~52、78~82 做「山形」）
+    const midT  = smoothstep(t,19,21) * (1 - smoothstep(t,27,29));
+    const midH  = smoothstep(h,48,52) * (1 - smoothstep(h,78,82));
+    const moderate = midT * midH;
+    // 綜合：高風險權重 1.0；中風險權重 0.6；其餘趨近 0
+    const r = Math.max(high, 0.6 * moderate);
+    return clamp01(r);
   }
+
   function sliceByRange(arr, key){
     const end = Date.now(); let start = end;
     if (key==='24h') start -= 24*3600*1000;
@@ -144,8 +167,9 @@
     }
   }
   function update(key){
-    const rows = sliceByRange(raw, key).map(d => ({ x:d.t, y:riskIndex(d.temp,d.rh), risk:riskIndex(d.temp,d.rh), temp:d.temp, rh:d.rh }));
+    const rows = sliceByRange(raw, key).map(d => ({ x:d.t, y:softRisk(d.temp,d.rh), temp:d.temp, rh:d.rh }));    chart.data.datasets[0].data = rows;
     chart.data.datasets[0].data = rows;
+    chart.options.scales.x.time.unit = (key === '24h') ? 'hour' : 'day';
     chart.update();
   }
 
