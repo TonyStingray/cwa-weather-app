@@ -40,52 +40,49 @@
 
 <script>
 (async function () {
+  // DOM 取用
+  const rangeSel = document.getElementById('range');               // 你原本的「時間範圍」select
+  const stationCodeEl = document.getElementById('stationCode');    // 顯示站號的 span
+  const controlsRow = document.querySelector('.row.card');         // 上方白色那塊容器
+  const msgBox = document.getElementById('msg') || (()=>{          // 錯誤訊息容器（沒有就建一個）
+    const d=document.createElement('div'); d.id='msg'; d.style.color='#dc2626';
+    controlsRow.after(d); return d;
+  })();
+
+  // 動態加「站台」下拉
   const stationSel = document.createElement('select');
   stationSel.id = 'station';
   stationSel.style.marginRight = '8px';
-  const rangeSel = document.getElementById('range');
-  document.querySelector('.row.card').insertBefore(stationSel, rangeSel.parentElement);
+  rangeSel.parentElement.before(stationSel);
 
-  // 1) 讀 stations 索引，填下拉
-  const idx = await (await fetch('data/index.json', {cache:'no-store'})).json();
-  const stations = idx.stations || [];
-  const urlSid = (new URLSearchParams(location.search)).get("sid");
+  // 工具：用目前頁面當 base，組絕對路徑（避免相對路徑出錯）
+  const urlFrom = p => new URL(p, location.href).toString();
+
+  // 1) 讀站台清單
+  let stations = [];
+  try {
+    const idx = await (await fetch(urlFrom('data/index.json'), {cache:'no-store'})).json();
+    stations = idx.stations || [];
+  } catch (e) {
+    msgBox.textContent = '載入站台清單失敗：' + e;
+    return;
+  }
+  if (!stations.length) {
+    msgBox.textContent = '目前沒有任何站台資料（請確認 Actions 是否產出 docs/data/index.json）。';
+    return;
+  }
+
+  // 2) 生選單（支援 ?sid= 查詢參數）
+  const urlSid = (new URLSearchParams(location.search)).get('sid');
   stations.forEach((s, i) => {
     const opt = document.createElement('option');
     opt.value = s.sid;
     opt.textContent = `${s.city} ${s.town} ${s.name} (${s.sid})`;
-    if ((urlSid && s.sid===urlSid) || (!urlSid && i===0)) opt.selected = true;
+    if ((urlSid && s.sid === urlSid) || (!urlSid && i === 0)) opt.selected = true;
     stationSel.appendChild(opt);
   });
 
-  const stationCodeEl = document.getElementById('stationCode');
-  let raw = [];
-
-  async function loadData(sid){
-    stationCodeEl.textContent = sid;
-    const resp = await fetch(`data/${sid}.json`, {cache:'no-store'});
-    const payload = await resp.json();
-    raw = payload.series.map(d => ({
-      t: new Date(d.t), temp: d.temp, rh: d.rh, rain: d.rain
-    }));
-    update(rangeSel.value);
-  }
-
-  function riskIndex(temp, rh){
-    if (temp==null || rh==null) return 1;
-    if (temp >= 28 && rh >= 80) return 3;
-    if (temp >= 20 && temp < 28 && rh >= 50 && rh < 80) return 2;
-    return 1;
-  }
-  function filterByRange(arr, key){
-    const end = Date.now();
-    let start = end;
-    if (key==="24h") start -= 24*3600*1000;
-    else if (key==="7d") start -= 7*24*3600*1000;
-    else start -= 30*24*3600*1000;
-    return arr.filter(d => d.t.getTime() >= start && d.t.getTime() <= end);
-  }
-
+  // 3) Chart.js + 風險色帶
   const riskBands = {
     id: 'riskBands',
     beforeDraw(chart){
@@ -102,37 +99,61 @@
 
   const ctx = document.getElementById('riskChart');
   const chart = new Chart(ctx, {
-    type:'line',
-    data:{ datasets:[{ label:'Risk', parsing:false, data:[], borderWidth:2, pointRadius:0, tension:.35 }]},
-    options:{
+    type: 'line',
+    data: { datasets: [{ label:'Risk', parsing:false, data:[], borderWidth:2, pointRadius:0, tension:.35 }]},
+    options: {
       animation:false,
       scales:{
         x:{ type:'time', time:{ unit:'hour' }},
-        y:{ min:1, max:3, ticks:{ callback:(v)=>({1:'Low',2:'Moderate',3:'High'}[v]||v) } }
+        y:{ min:1, max:3, ticks:{ callback: v => ({1:'Low',2:'Moderate',3:'High'}[v]||v) } }
       },
       plugins:{ legend:{display:false},
-        tooltip:{ callbacks:{ label:(ctx)=>{
-          const d = ctx.raw, label = d.risk===3?'High':(d.risk===2?'Moderate':'Low');
-          return `${label}  (T=${d.temp ?? '–'}°C, RH=${d.rh ?? '–'}%)`;
+        tooltip:{ callbacks:{ label: ctx=>{
+          const d=ctx.raw, label=d.risk===3?'High':(d.risk===2?'Moderate':'Low');
+          return `${label} (T=${d.temp??'–'}°C, RH=${d.rh??'–'}%)`;
         }}}
       }
     },
     plugins:[riskBands]
   });
 
-  function update(rangeKey){
-    const rows = filterByRange(raw, rangeKey).map(d => ({
-      x:d.t, y:riskIndex(d.temp,d.rh), risk:riskIndex(d.temp,d.rh), temp:d.temp, rh:d.rh
-    }));
+  // 4) 載資料 + 更新圖
+  let raw = [];
+  function riskIndex(t, h){
+    if (t==null || h==null) return 1;
+    if (t>=28 && h>=80) return 3;
+    if (t>=20 && t<28 && h>=50 && h<80) return 2;
+    return 1;
+  }
+  function sliceByRange(arr, key){
+    const end = Date.now(); let start = end;
+    if (key==='24h') start -= 24*3600*1000;
+    else if (key==='7d') start -= 7*24*3600*1000;
+    else start -= 30*24*3600*1000;
+    return arr.filter(d => d.t.getTime()>=start && d.t.getTime()<=end);
+  }
+  async function loadData(sid){
+    msgBox.textContent = '';
+    stationCodeEl.textContent = sid;
+    try{
+      const j = await (await fetch(urlFrom(`data/${sid}.json`), {cache:'no-store'})).json();
+      raw = (j.series||[]).map(d => ({ t:new Date(d.t), temp:d.temp, rh:d.rh, rain:d.rain }));
+      update(rangeSel.value);
+    }catch(e){
+      msgBox.textContent = `載入 ${sid}.json 失敗：` + e;
+    }
+  }
+  function update(key){
+    const rows = sliceByRange(raw, key).map(d => ({ x:d.t, y:riskIndex(d.temp,d.rh), risk:riskIndex(d.temp,d.rh), temp:d.temp, rh:d.rh }));
     chart.data.datasets[0].data = rows;
     chart.update();
   }
 
-  // 事件
+  // 5) 綁事件
   stationSel.addEventListener('change', ()=>loadData(stationSel.value));
   rangeSel.addEventListener('change', ()=>update(rangeSel.value));
 
-  // 初始化
+  // 6) 初始化
   await loadData(stationSel.value);
 })();
 </script>
