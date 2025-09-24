@@ -133,7 +133,7 @@
   return t * t * (3 - 2 * t);
   };
 
-  function riskIndex(t, h){
+  function softRisk(t, h){
     if (t==null || h==null) return null;
     // 高風險：T≈28↑、RH≈80↑（用平滑門檻 27~29 與 78~82）
     const highT = smoothstep(t, 27, 29);
@@ -167,7 +167,7 @@
     }
   }
   function update(key){
-    const rows = sliceByRange(raw, key).map(d => ({ x:d.t, y:softRisk(d.temp,d.rh), temp:d.temp, rh:d.rh }));    chart.data.datasets[0].data = rows;
+    const rows = sliceByRange(raw, key).map(d => ({ x: d.t, y: softRisk(d.temp, d.rh), temp: d.temp, rh: d.rh }));
     chart.data.datasets[0].data = rows;
     chart.options.scales.x.time.unit = (key === '24h') ? 'hour' : 'day';
     chart.update();
