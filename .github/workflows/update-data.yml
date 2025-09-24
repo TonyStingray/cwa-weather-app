@@ -21,9 +21,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: requirements.txt
 
       - run: python -m pip install -U pip
-      - run: pip install pandas requests python-dotenv xmltodict
+      - run: pip install -r requirements.txt
 
       - name: Update caches & export JSON
         env:
