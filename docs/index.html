@@ -40,27 +40,42 @@
 
 <script>
 (async function () {
-  // 1) 設定：改成你的檔名（用 STATION_ID 命名）
-  const STATION_ID = (new URLSearchParams(location.search)).get("sid") || "C0F9N0";
-  const DATA_URL = `data/${STATION_ID}.json`;
-  document.getElementById('stationCode').textContent = STATION_ID;
+  const stationSel = document.createElement('select');
+  stationSel.id = 'station';
+  stationSel.style.marginRight = '8px';
+  const rangeSel = document.getElementById('range');
+  document.querySelector('.row.card').insertBefore(stationSel, rangeSel.parentElement);
 
-  // 2) 載入資料
-  const resp = await fetch(DATA_URL);
-  const payload = await resp.json();
-  const raw = payload.series.map(d => ({
-    t: new Date(d.t),
-    temp: d.temp,
-    rh: d.rh,
-    rain: d.rain
-  }));
+  // 1) 讀 stations 索引，填下拉
+  const idx = await (await fetch('data/index.json', {cache:'no-store'})).json();
+  const stations = idx.stations || [];
+  const urlSid = (new URLSearchParams(location.search)).get("sid");
+  stations.forEach((s, i) => {
+    const opt = document.createElement('option');
+    opt.value = s.sid;
+    opt.textContent = `${s.city} ${s.town} ${s.name} (${s.sid})`;
+    if ((urlSid && s.sid===urlSid) || (!urlSid && i===0)) opt.selected = true;
+    stationSel.appendChild(opt);
+  });
 
-  // 3) 風險計算
+  const stationCodeEl = document.getElementById('stationCode');
+  let raw = [];
+
+  async function loadData(sid){
+    stationCodeEl.textContent = sid;
+    const resp = await fetch(`data/${sid}.json`, {cache:'no-store'});
+    const payload = await resp.json();
+    raw = payload.series.map(d => ({
+      t: new Date(d.t), temp: d.temp, rh: d.rh, rain: d.rain
+    }));
+    update(rangeSel.value);
+  }
+
   function riskIndex(temp, rh){
-    if (temp==null || rh==null) return 1; // 缺值視為低風險
-    if (temp >= 28 && rh >= 80) return 3;              // 高
-    if (temp >= 20 && temp < 28 && rh >= 50 && rh < 80) return 2; // 中
-    return 1; // 其他狀況 → 低
+    if (temp==null || rh==null) return 1;
+    if (temp >= 28 && rh >= 80) return 3;
+    if (temp >= 20 && temp < 28 && rh >= 50 && rh < 80) return 2;
+    return 1;
   }
   function filterByRange(arr, key){
     const end = Date.now();
@@ -71,63 +86,35 @@
     return arr.filter(d => d.t.getTime() >= start && d.t.getTime() <= end);
   }
 
-  // 4) Chart.js 插件：畫三條背景風險帶＋現在的虛線
   const riskBands = {
     id: 'riskBands',
-    beforeDraw(chart, args, opts){
-      const {ctx, chartArea:{left, right, top, bottom, height}} = chart;
+    beforeDraw(chart){
+      const {ctx, chartArea:{left,right,top,bottom,height}} = chart;
       ctx.save();
-      // 低（綠）
-      ctx.fillStyle = 'rgba(52,211,153,0.65)';
-      ctx.fillRect(left, bottom - height/3, right-left, height/3);
-      // 中（黃）
-      ctx.fillStyle = 'rgba(253,224,71,0.65)';
-      ctx.fillRect(left, bottom - 2*height/3, right-left, height/3);
-      // 高（紅）
-      ctx.fillStyle = 'rgba(239,68,68,0.65)';
-      ctx.fillRect(left, top, right-left, height/3);
-      // 現在時間的虛線
+      ctx.fillStyle='rgba(52,211,153,0.65)'; ctx.fillRect(left,bottom-height/3,right-left,height/3);
+      ctx.fillStyle='rgba(253,224,71,0.65)'; ctx.fillRect(left,bottom-2*height/3,right-left,height/3);
+      ctx.fillStyle='rgba(239,68,68,0.65)'; ctx.fillRect(left,top,right-left,height/3);
       const x = chart.scales.x.getPixelForValue(new Date());
-      ctx.strokeStyle = '#2563eb';
-      ctx.setLineDash([6,6]);
-      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke();
+      ctx.strokeStyle='#2563eb'; ctx.setLineDash([6,6]); ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x,bottom); ctx.stroke();
       ctx.restore();
     }
   };
 
-  // 5) 建圖
   const ctx = document.getElementById('riskChart');
   const chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      datasets: [{
-        label: 'Risk index',
-        parsing: false,
-        data: [],             // 先給空，等下填
-        borderWidth: 2,
-        pointRadius: 0,
-        tension: 0.35
-      }]
-    },
-    options: {
-      animation: false,
-      scales: {
-        x: { type:'time', time:{ unit:'hour' } },
-        y: { min: 1, max: 3, ticks:{
-              callback:(v)=>({1:'Low',2:'Moderate',3:'High'}[v]||v)
-            } }
+    type:'line',
+    data:{ datasets:[{ label:'Risk', parsing:false, data:[], borderWidth:2, pointRadius:0, tension:.35 }]},
+    options:{
+      animation:false,
+      scales:{
+        x:{ type:'time', time:{ unit:'hour' }},
+        y:{ min:1, max:3, ticks:{ callback:(v)=>({1:'Low',2:'Moderate',3:'High'}[v]||v) } }
       },
-      plugins: {
-        legend: { display:false },
-        tooltip: {
-          callbacks: {
-            label: (ctx)=>{
-              const d = ctx.raw;
-              const label = d.risk===3?'High':(d.risk===2?'Moderate':'Low');
-              return `${label}  (T=${d.temp ?? '–'}°C, RH=${d.rh ?? '–'}%)`;
-            }
-          }
-        }
+      plugins:{ legend:{display:false},
+        tooltip:{ callbacks:{ label:(ctx)=>{
+          const d = ctx.raw, label = d.risk===3?'High':(d.risk===2?'Moderate':'Low');
+          return `${label}  (T=${d.temp ?? '–'}°C, RH=${d.rh ?? '–'}%)`;
+        }}}
       }
     },
     plugins:[riskBands]
@@ -135,18 +122,20 @@
 
   function update(rangeKey){
     const rows = filterByRange(raw, rangeKey).map(d => ({
-      x: d.t, y: riskIndex(d.temp, d.rh), risk: riskIndex(d.temp, d.rh),
-      temp: d.temp, rh: d.rh
+      x:d.t, y:riskIndex(d.temp,d.rh), risk:riskIndex(d.temp,d.rh), temp:d.temp, rh:d.rh
     }));
     chart.data.datasets[0].data = rows;
     chart.update();
   }
 
-  // 初始與事件
-  const sel = document.getElementById('range');
-  sel.addEventListener('change', ()=>update(sel.value));
-  update(sel.value);
+  // 事件
+  stationSel.addEventListener('change', ()=>loadData(stationSel.value));
+  rangeSel.addEventListener('change', ()=>update(rangeSel.value));
+
+  // 初始化
+  await loadData(stationSel.value);
 })();
 </script>
+
 </body>
 </html>

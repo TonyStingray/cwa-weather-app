@@ -107,6 +107,6 @@ for ax in axs:
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-out_path = "web/dali_last7d.png"
+out_path = "docs/dali_last7d.png"
 plt.savefig(out_path, dpi=150)
 print("Saved:", out_path)

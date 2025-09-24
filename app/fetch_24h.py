@@ -93,5 +93,5 @@ for ax in axs:
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig("web/dali_last24h.png", dpi=300)
-print("Saved: web/dali_last24h.png")
+plt.savefig("docs/dali_last24h.png", dpi=300)
+print("Saved: docs/dali_last24h.png")

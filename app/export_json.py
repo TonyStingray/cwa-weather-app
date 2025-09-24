@@ -10,7 +10,7 @@ if not STATION_ID:
 DAYS = int(os.getenv("EXPORT_DAYS", "30"))
 
 cache_path = f"data/{STATION_ID}_hourly.csv"
-out_dir = "web/data"; os.makedirs(out_dir, exist_ok=True)
+out_dir = "docs/data"; os.makedirs(out_dir, exist_ok=True)
 out_path = f"{out_dir}/{STATION_ID}.json"
 
 if not os.path.exists(cache_path):
