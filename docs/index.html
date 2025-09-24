@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>作物病害風險儀表板（Demo）</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans TC", Arial, sans-serif; margin: 24px; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .card { border:1px solid #e5e7eb; border-radius:12px; padding:16px; box-shadow:0 1px 4px rgba(0,0,0,.05); }
+    #chartWrap { padding: 8px 8px 0 8px; }
+    small.muted { color:#6b7280 }
+    select, button { padding:6px 10px; border-radius:8px; border:1px solid #cbd5e1; background:#fff; }
+    .legend-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+</head>
+<body>
+  <h2>作物病害風險儀表板（Demo）</h2>
+  <div class="row card" style="gap:16px;">
+    <div>站號：<code id="stationCode">讀取中…</code></div>
+    <label>時間範圍
+      <select id="range">
+        <option value="24h">最近 24 小時</option>
+        <option value="7d" selected>最近 7 天</option>
+        <option value="30d">最近 30 天</option>
+      </select>
+    </label>
+    <span class="muted">規則：<span class="legend-dot" style="background:#34d399"></span>低風險（T&lt;20 且 RH&lt;50）、
+      <span class="legend-dot" style="background:#fde047"></span>中風險（20≤T&lt;28 且 50≤RH&lt;80）、
+      <span class="legend-dot" style="background:#ef4444"></span>高風險（T≥28 且 RH≥80）</span>
+  </div>
+
+  <div id="chartWrap" class="card">
+    <canvas id="riskChart" height="120"></canvas>
+  </div>
+
+  <small class="muted">資料來源：CWA OpenData（由快取 JSON 提供）；此頁僅示範。</small>
+
+<script>
+(async function () {
+  // 1) 設定：改成你的檔名（用 STATION_ID 命名）
+  const STATION_ID = (new URLSearchParams(location.search)).get("sid") || "C0F9N0";
+  const DATA_URL = `data/${STATION_ID}.json`;
+  document.getElementById('stationCode').textContent = STATION_ID;
+
+  // 2) 載入資料
+  const resp = await fetch(DATA_URL);
+  const payload = await resp.json();
+  const raw = payload.series.map(d => ({
+    t: new Date(d.t),
+    temp: d.temp,
+    rh: d.rh,
+    rain: d.rain
+  }));
+
+  // 3) 風險計算
+  function riskIndex(temp, rh){
+    if (temp==null || rh==null) return 1; // 缺值視為低風險
+    if (temp >= 28 && rh >= 80) return 3;              // 高
+    if (temp >= 20 && temp < 28 && rh >= 50 && rh < 80) return 2; // 中
+    return 1; // 其他狀況 → 低
+  }
+  function filterByRange(arr, key){
+    const end = Date.now();
+    let start = end;
+    if (key==="24h") start -= 24*3600*1000;
+    else if (key==="7d") start -= 7*24*3600*1000;
+    else start -= 30*24*3600*1000;
+    return arr.filter(d => d.t.getTime() >= start && d.t.getTime() <= end);
+  }
+
+  // 4) Chart.js 插件：畫三條背景風險帶＋現在的虛線
+  const riskBands = {
+    id: 'riskBands',
+    beforeDraw(chart, args, opts){
+      const {ctx, chartArea:{left, right, top, bottom, height}} = chart;
+      ctx.save();
+      // 低（綠）
+      ctx.fillStyle = 'rgba(52,211,153,0.65)';
+      ctx.fillRect(left, bottom - height/3, right-left, height/3);
+      // 中（黃）
+      ctx.fillStyle = 'rgba(253,224,71,0.65)';
+      ctx.fillRect(left, bottom - 2*height/3, right-left, height/3);
+      // 高（紅）
+      ctx.fillStyle = 'rgba(239,68,68,0.65)';
+      ctx.fillRect(left, top, right-left, height/3);
+      // 現在時間的虛線
+      const x = chart.scales.x.getPixelForValue(new Date());
+      ctx.strokeStyle = '#2563eb';
+      ctx.setLineDash([6,6]);
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke();
+      ctx.restore();
+    }
+  };
+
+  // 5) 建圖
+  const ctx = document.getElementById('riskChart');
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [{
+        label: 'Risk index',
+        parsing: false,
+        data: [],             // 先給空，等下填
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.35
+      }]
+    },
+    options: {
+      animation: false,
+      scales: {
+        x: { type:'time', time:{ unit:'hour' } },
+        y: { min: 1, max: 3, ticks:{
+              callback:(v)=>({1:'Low',2:'Moderate',3:'High'}[v]||v)
+            } }
+      },
+      plugins: {
+        legend: { display:false },
+        tooltip: {
+          callbacks: {
+            label: (ctx)=>{
+              const d = ctx.raw;
+              const label = d.risk===3?'High':(d.risk===2?'Moderate':'Low');
+              return `${label}  (T=${d.temp ?? '–'}°C, RH=${d.rh ?? '–'}%)`;
+            }
+          }
+        }
+      }
+    },
+    plugins:[riskBands]
+  });
+
+  function update(rangeKey){
+    const rows = filterByRange(raw, rangeKey).map(d => ({
+      x: d.t, y: riskIndex(d.temp, d.rh), risk: riskIndex(d.temp, d.rh),
+      temp: d.temp, rh: d.rh
+    }));
+    chart.data.datasets[0].data = rows;
+    chart.update();
+  }
+
+  // 初始與事件
+  const sel = document.getElementById('range');
+  sel.addEventListener('change', ()=>update(sel.value));
+  update(sel.value);
+})();
+</script>
+</body>
+</html>
