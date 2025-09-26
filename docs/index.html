@@ -60,6 +60,32 @@
   // 工具：用目前頁面當 base，組絕對路徑（避免相對路徑出錯）
   const urlFrom = p => new URL(p, location.href).toString();
 
+  // === 時間窗 & 刻度工具（新增，約第 105 行）=========================
+  const H = 3600 * 1000, D = 24 * H;  // 毫秒
+  function rangeWindow(key){
+    const now = new Date();
+    const start = new Date(now), end = new Date(now);
+    if (key === '24h'){ start.setTime(now - 24*H); end.setTime(now.getTime() + 8*H); }
+    else if (key === '7d'){ start.setTime(now - 7*D); end.setTime(now.getTime() + 3*D); }
+    else { start.setMonth(now.getMonth() - 1); end.setTime(now.getTime() + 7*D); } // 30d + 7d
+    return {start, end, now};
+  }
+  function timeTicksCfg(key){
+    if (key === '24h') return { unit:'hour', stepSize:1, displayFormats:{hour:'HH:mm'} };
+    if (key === '7d')  return { unit:'day',  stepSize:1, displayFormats:{day:'MM-dd'} };
+    return { unit:'week', stepSize:1, displayFormats:{week:'MM-dd'} }; // 30d 視週
+  }
+  // 依小時補到結束時間（未來段補 null，讓軸撐出去）
+  function padToEnd(rows, end){
+    const last = rows.length ? rows[rows.length-1].x : new Date();
+    let t = new Date(last.getTime() + H);
+    while (t <= end){
+      rows.push({ x: new Date(t), y: null }); // null 使線段中斷；軸仍延伸
+      t = new Date(t.getTime() + H);
+    }
+  }
+// ================================================================
+
   // 1) 讀站台清單
   let stations = [];
   try {
@@ -125,20 +151,20 @@
   const riskBands = {
     id: 'riskBands',
     beforeDraw(chart){
-      const {ctx, chartArea:{left,right,top,bottom}, scales:{y}} = chart;
+      const {ctx, chartArea:{left,right,top,bottom}, scales:{x,y}} = chart;
+      if (!x || !y) return;
       ctx.save();
-      const yLowTop = y.getPixelForValue(1/3);   // 0.33
-      const yMidTop = y.getPixelForValue(2/3);   // 0.66
-      // 低風險：0 ~ 0.33
-      ctx.fillStyle='rgba(52,211,153,0.65)';   ctx.fillRect(left, yLowTop, right-left, bottom - yLowTop);
-      // 中風險：0.33 ~ 0.66
-      ctx.fillStyle='rgba(253,224,71,0.65)';   ctx.fillRect(left, yMidTop, right-left, yLowTop - yMidTop);
-      // 高風險：0.66 ~ 1
-      ctx.fillStyle='rgba(239,68,68,0.65)';    ctx.fillRect(left, top, right-left, yMidTop - top);
-      // 現在時間虛線
-      const xNow = chart.scales.x.getPixelForValue(new Date());
-      ctx.strokeStyle='#2563eb'; ctx.setLineDash([6,6]);
-      ctx.beginPath(); ctx.moveTo(xNow, top); ctx.lineTo(xNow, bottom); ctx.stroke();
+      // 三色帶（0~1 對齊）
+      const yLowTop = y.getPixelForValue(1/3);
+      const yMidTop = y.getPixelForValue(2/3);
+      ctx.fillStyle='rgba(52,211,153,0.65)'; ctx.fillRect(left, yLowTop, right-left, bottom - yLowTop);
+      ctx.fillStyle='rgba(253,224,71,0.65)'; ctx.fillRect(left, yMidTop,  right-left, yLowTop - yMidTop);
+      ctx.fillStyle='rgba(239,68,68,0.65)';  ctx.fillRect(left, top,      right-left, yMidTop - top);
+
+      // 「現在」虛線（每次 redraw 以實時 now 定位）
+      const nowX = x.getPixelForValue(new Date());
+      ctx.strokeStyle='#2563eb'; ctx.setLineDash([6,6]); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(nowX, top); ctx.lineTo(nowX, bottom); ctx.stroke();
       ctx.restore();
     }
   };
@@ -206,12 +232,33 @@
     }
   }
   function update(key){
-    const rows = sliceByRange(raw, key).map(d => ({ x: d.t, y: softRisk(d.temp, d.rh), temp: d.temp, rh: d.rh }));
+    const {start, end} = rangeWindow(key);
+
+    // 篩選「起點到現在」的觀測資料
+    const rows = raw
+      .filter(d => d.t >= start && d.t <= new Date())
+      .map(d => ({ x:d.t, y: softRisk(d.temp, d.rh), temp:d.temp, rh:d.rh }));
+
+    // 補到未來結束時間（null 讓未來線段中斷，但軸延伸）
+    padToEnd(rows, end);
+
+    // 餵給圖表
     chart.data.datasets[0].data = rows;
-    // X 軸單位：24h→hour，7d→day，30d→week（你說「一個月」，這裡改成週視覺最清楚）
-    const unitFor = k => (k === '24h') ? 'hour' : (k === '7d' ? 'day' : 'week');
-    chart.options.scales.x.time.unit = unitFor(key);
-    chart.update();
+
+    // X 軸視窗 & 刻度
+    chart.options.scales.x.min = start;
+    chart.options.scales.x.max = end;
+    chart.options.scales.x.time = timeTicksCfg(key);
+    chart.options.scales.x.ticks = {
+      autoSkip:false,   // 全都顯示
+      maxRotation:0,
+      source:'auto',
+      align:'center',
+      // 只在整點/整日/整週顯示（Chart.js 會配合 time.unit 處理）
+    };
+
+    // 24h/7d/30d 都用相同的 Y 軸（0~1）
+    chart.update('none');
   }
 
   // 5) 綁事件
