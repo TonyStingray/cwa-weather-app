@@ -17,7 +17,7 @@ if not os.path.exists(cache_path):
     raise FileNotFoundError(f"找不到快取檔：{cache_path}（先跑 fetch_7d.py 累積一下）")
 
 df = pd.read_csv(cache_path, parse_dates=["DateTime"]).sort_values("DateTime")
-end = df["DateTime"].max()
+end = pd.Timestamp.now(tz="Asia/Taipei").floor("h")
 start = end - pd.Timedelta(days=DAYS)
 df = df[df["DateTime"].between(start, end)].copy()
 
