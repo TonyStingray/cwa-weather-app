@@ -53,7 +53,9 @@
   const stationSel = document.createElement('select');
   stationSel.id = 'station';
   stationSel.style.marginRight = '8px';
-  rangeSel.parentElement.before(stationSel);
+  const citySel = document.createElement('select');  citySel.id = 'city';  citySel.style.marginRight = '8px';
+  const townSel = document.createElement('select');  townSel.id = 'town';  townSel.style.marginRight = '8px';
+  rangeSel.parentElement.before(citySel); rangeSel.parentElement.before(townSel); rangeSel.parentElement.before(stationSel);
 
   // 工具：用目前頁面當 base，組絕對路徑（避免相對路徑出錯）
   const urlFrom = p => new URL(p, location.href).toString();
@@ -72,15 +74,52 @@
     return;
   }
 
-  // 2) 生選單（支援 ?sid= 查詢參數）
-  const urlSid = (new URLSearchParams(location.search)).get('sid');
-  stations.forEach((s, i) => {
-    const opt = document.createElement('option');
-    opt.value = s.sid;
-    opt.textContent = `${s.city} ${s.town} ${s.name} (${s.sid})`;
-    if ((urlSid && s.sid === urlSid) || (!urlSid && i === 0)) opt.selected = true;
-    stationSel.appendChild(opt);
-  });
+  // 2) 兩層篩選 + 站台（支援 ?city= & ?town= & ?sid=）
+  const usp = new URLSearchParams(location.search);
+  let urlSid  = usp.get('sid');
+  let urlCity = usp.get('city');
+  let urlTown = usp.get('town');
+
+  const uniq = arr => [...new Set(arr)];
+  function fillCities() {
+    const cities = uniq(stations.map(s => s.city)).sort();
+    citySel.innerHTML = '';
+    cities.forEach(c => {
+      const o = document.createElement('option'); o.value = c; o.textContent = c; citySel.appendChild(o);
+    });
+    // 預設：URL ?city 或第一個
+    citySel.value = urlCity && cities.includes(urlCity) ? urlCity : cities[0];
+  }
+  function fillTowns() {
+    const towns = uniq(stations.filter(s => s.city === citySel.value).map(s => s.town)).sort();
+    townSel.innerHTML = '';
+    towns.forEach(t => {
+      const o = document.createElement('option'); o.value = t; o.textContent = t; townSel.appendChild(o);
+    });
+    // 預設：URL ?town 或第一個
+    townSel.value = (urlTown && towns.includes(urlTown)) ? urlTown : towns[0];
+  }
+  function fillStations() {
+    const list = stations.filter(s => s.city === citySel.value && s.town === townSel.value);
+    stationSel.innerHTML = '';
+    list.forEach((s, i) => {
+      const opt = document.createElement('option');
+      opt.value = s.sid; opt.textContent = `${s.city} ${s.town} ${s.name} (${s.sid})`;
+      stationSel.appendChild(opt);
+    });
+    // 預設：URL ?sid 或第一個
+    if (urlSid && list.some(x => x.sid === urlSid)) stationSel.value = urlSid;
+    else stationSel.selectedIndex = 0;
+    stationCodeEl.textContent = stationSel.value;
+  }
+
+  // 初始灌入
+  fillCities(); fillTowns(); fillStations();
+
+  // 變更事件（聯動）
+  citySel.addEventListener('change', () => { urlCity = citySel.value; urlTown = urlSid = null; fillTowns(); fillStations(); loadData(stationSel.value); });
+  townSel.addEventListener('change', () => { urlTown = townSel.value; urlSid = null; fillStations(); loadData(stationSel.value); });
+
 
    // 3) Chart.js + 風險色帶（對應 Y=0~1，Low/Moderate/High 三帶）
   const riskBands = {
@@ -169,7 +208,9 @@
   function update(key){
     const rows = sliceByRange(raw, key).map(d => ({ x: d.t, y: softRisk(d.temp, d.rh), temp: d.temp, rh: d.rh }));
     chart.data.datasets[0].data = rows;
-    chart.options.scales.x.time.unit = (key === '24h') ? 'hour' : 'day';
+    // X 軸單位：24h→hour，7d→day，30d→week（你說「一個月」，這裡改成週視覺最清楚）
+    const unitFor = k => (k === '24h') ? 'hour' : (k === '7d' ? 'day' : 'week');
+    chart.options.scales.x.time.unit = unitFor(key);
     chart.update();
   }
 
