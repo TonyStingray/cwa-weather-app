@@ -81,11 +81,27 @@ def update_station(sid, city, town, name):
         "rain": 0.0 if pd.isna(p) else float(p),
     } for d, t, h, p in zip(df_out["DateTime"], df_out["Temperature"], df_out["RH"], df_out["Precip"])]
 
+    # === 新增：三個視圖的「未來時段佔位」 ==============================
+    now = pd.Timestamp.now(tz="Asia/Taipei").floor("h")
+
+    def future_hours(n):
+        return [(now + pd.Timedelta(hours=i)).isoformat() for i in range(1, n+1)]
+
+    forecast = {
+        "24h": [{"t": t, "temp": None, "rh": None} for t in future_hours(8)],
+        "7d":  [{"t": (now + pd.Timedelta(hours=i)).isoformat(), "temp": None, "rh": None}
+                for i in range(1, 3*24 + 1)],
+        "30d": [{"t": (now + pd.Timedelta(hours=i)).isoformat(), "temp": None, "rh": None}
+                for i in range(1, 7*24 + 1)],
+    }
+    # ================================================================
+
     payload = {
         "station": sid,
         "city": city, "town": town, "name": name,
         "generated_at": pd.Timestamp.utcnow().isoformat() + "Z",
         "series": records,
+        "forecast": forecast,
     }
     out_path = f"docs/data/{sid}.json"
     with open(out_path, "w", encoding="utf-8") as f:

@@ -30,10 +30,30 @@ for _, row in df.iterrows():
         "rain": 0.0  if pd.isna(row["Precip"])     else float(row["Precip"]),
     })
 
+# === 這段是新增：建立三個視圖要用的「未來時段佔位」 ======================
+now = pd.Timestamp.now(tz="Asia/Taipei").floor("h")
+
+def future_hours(n):
+    # 產生未來 n 小時的 ISO 時戳（含時區）
+    return [(now + pd.Timedelta(hours=i)).isoformat() for i in range(1, n+1)]
+
+forecast = {
+    # 24h 視圖右側要 +8 小時
+    "24h": [{"t": t, "temp": None, "rh": None} for t in future_hours(8)],
+    # 7d 視圖右側要 +3 天（= 72 小時）
+    "7d":  [{"t": (now + pd.Timedelta(hours=i)).isoformat(), "temp": None, "rh": None}
+            for i in range(1, 3*24 + 1)],
+    # 30d 視圖右側要 +7 天（= 168 小時）
+    "30d": [{"t": (now + pd.Timedelta(hours=i)).isoformat(), "temp": None, "rh": None}
+            for i in range(1, 7*24 + 1)],
+}
+# =====================================================================
+
 payload = {
     "station": STATION_ID,
     "generated_at": pd.Timestamp.utcnow().isoformat() + "Z",
-    "series": records
+    "series": records,
+    "forecast": forecast,
 }
 
 with open(out_path, "w", encoding="utf-8") as f:
